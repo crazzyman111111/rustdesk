@@ -2141,12 +2141,23 @@ fn apply_corporate_defaults() {
         //    TOML 里已有同键时以 TOML 为准，此处对已装机为冗余保险、对新机为必要兜底。
         if let Some(server) = config::RENDEZVOUS_SERVERS.first() {
             let s = server.to_string();
-            let with_port = format!("{}:{}", s, config::RENDEZVOUS_PORT);
+            // ⚠️ ID 与中继是「同主机、不同端口」，绝不能共用一个 with_port：
+            //     hbbs（ID/打洞）监听 RENDEZVOUS_PORT = 21116
+            //     hbbr（中继）   监听 RELAY_PORT      = 21117
+            // 佐证：rendezvous_mediator.rs::get_relay_server() 对**非空**的
+            //     relay-server 直接采信（只有为空才回落 increase_port(host,1)），
+            //     不做任何端口修正。因此这里若写成 21116，P2P 打洞失败需走中继时
+            //     会连到 hbbs 的端口 → 中继不可用（跨网段/对称 NAT 场景才暴露）。
+            // （若 TOML 里已有 relay-server，get_or 以 TOML 为准，会掩盖此错；
+            //   免安装版 / 裸 MSI 未写 TOML 时会直接踩中。）
             settings.insert(
                 keys::OPTION_CUSTOM_RENDEZVOUS_SERVER.to_owned(),
-                with_port.clone(),
+                format!("{}:{}", s, config::RENDEZVOUS_PORT),
             );
-            settings.insert(keys::OPTION_RELAY_SERVER.to_owned(), with_port);
+            settings.insert(
+                keys::OPTION_RELAY_SERVER.to_owned(),
+                format!("{}:{}", s, config::RELAY_PORT),
+            );
             settings.insert(
                 keys::OPTION_API_SERVER.to_owned(),
                 format!("http://{}:{}", s, config::RENDEZVOUS_PORT - 2),
