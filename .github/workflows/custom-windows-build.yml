@@ -6,10 +6,13 @@ name: Custom Windows Build (Moganshan)
 #   2. 不发布 Release，仅上传 workflow artifact 供下载
 #   3. 跳过签名步骤（fork 无签名密钥，SIGN_BASE_URL 为空时自动跳过）
 #
-# 使用方法：Actions -> Custom Windows Build -> Run workflow
+# 使用方法：向 build-custom 分支 push 即自动触发（workflow_dispatch 需文件在默认分支才可用）
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - build-custom
 
 env:
   SCITER_RUST_VERSION: "1.75"
