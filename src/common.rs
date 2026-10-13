@@ -939,13 +939,10 @@ pub fn is_modifier(evt: &KeyEvent) -> bool {
 }
 
 pub fn check_software_update() {
-    if is_custom_client() {
-        return;
-    }
-    let opt = LocalConfig::get_option(keys::OPTION_ENABLE_CHECK_UPDATE);
-    if config::option2bool(keys::OPTION_ENABLE_CHECK_UPDATE, &opt) {
-        std::thread::spawn(move || allow_err!(do_check_software_update()));
-    }
+    // ==== MOGANSHAN CUSTOM BUILD: 硬关闭检查更新 ====
+    // 自建内网环境无法访问 https://api.rustdesk.com，检查更新只会产生无效网络请求与日志噪音。
+    // 与 DEFAULT_LOCAL_SETTINGS["enable-check-update"]="N" 双保险。
+    return;
 }
 
 // No need to check `danger_accept_invalid_cert` for now.
@@ -1080,7 +1077,18 @@ fn get_api_server_(api: String, custom: String) -> String {
             return format!("http://{}", s);
         }
     }
-    "https://admin.rustdesk.com".to_owned()
+    // ==== MOGANSHAN CUSTOM BUILD: 移除官方 API 回退（https://admin.rustdesk.com）
+    // 改为回退到内网自建 API server（由内嵌 rendezvous server 推导，端口 -2 = 21114）
+    if let Some(server) = config::RENDEZVOUS_SERVERS.first() {
+        let s0 = server.to_string();
+        let s = crate::increase_port(&s0, -2);
+        if s == s0 {
+            return format!("http://{}:{}", s, config::RENDEZVOUS_PORT - 2);
+        } else {
+            return format!("http://{}", s);
+        }
+    }
+    "".to_owned()
 }
 
 #[inline]
@@ -1936,48 +1944,13 @@ pub fn check_process(arg: &str, mut same_uid: bool) -> bool {
 }
 
 async fn secure_tcp_impl(conn: &mut Stream, key: &str, log_on_success: bool) -> ResultType<()> {
-    // Skip additional encryption when using WebSocket connections (wss://)
-    // as WebSocket Secure (wss://) already provides transport layer encryption.
-    // This doesn't affect the end-to-end encryption between clients,
-    // it only avoids redundant encryption between client and server.
-    if use_ws() {
-        return Ok(());
-    }
-    let rs_pk = get_rs_pk(key);
-    let Some(rs_pk) = rs_pk else {
-        bail!("Handshake failed: invalid public key from rendezvous server");
-    };
-    match timeout(READ_TIMEOUT, conn.next()).await? {
-        Some(Ok(bytes)) => {
-            if let Ok(msg_in) = RendezvousMessage::parse_from_bytes(&bytes) {
-                match msg_in.union {
-                    Some(rendezvous_message::Union::KeyExchange(ex)) => {
-                        if ex.keys.len() != 1 {
-                            bail!("Handshake failed: invalid key exchange message");
-                        }
-                        let their_pk_b = sign::verify(&ex.keys[0], &rs_pk)
-                            .map_err(|_| anyhow!("Signature mismatch in key exchange"))?;
-                        let (asymmetric_value, symmetric_value, key) = create_symmetric_key_msg(
-                            get_pk(&their_pk_b)
-                                .context("Wrong their public length in key exchange")?,
-                        );
-                        let mut msg_out = RendezvousMessage::new();
-                        msg_out.set_key_exchange(KeyExchange {
-                            keys: vec![asymmetric_value, symmetric_value],
-                            ..Default::default()
-                        });
-                        timeout(CONNECT_TIMEOUT, conn.send(&msg_out)).await??;
-                        conn.set_key(key);
-                        if log_on_success {
-                            log::info!("Connection secured");
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        _ => {}
-    }
+    // ==== MOGANSHAN CUSTOM BUILD: 直接返回，禁用 secure_tcp 加密握手 ====
+    // 背景：客户端同时持有服务器 key + 登录 token 时会强制发起 secure_tcp 握手，
+    // 而开源版 rustdesk-server(hbbs) 不响应此握手（Pro 专属特性），
+    // 导致「客户端登录账号后远程一直转圈直到超时」。
+    // 开源版本身已有端到端加密（X25519 + NaCl），该层仅为保护 token 的附加加密层，
+    // 在自建内网环境下禁用它不会降低端到端安全性。
+    let _ = (conn, key, log_on_success);
     Ok(())
 }
 
@@ -1990,6 +1963,7 @@ async fn secure_tcp_silent(conn: &mut Stream, key: &str) -> ResultType<()> {
 }
 
 #[inline]
+#[allow(dead_code)]
 fn get_pk(pk: &[u8]) -> Option<[u8; 32]> {
     if pk.len() == 32 {
         let mut tmp = [0u8; 32];
@@ -2080,7 +2054,57 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
     ThrottledInterval::new(i)
 }
 
+/// ==== MOGANSHAN CUSTOM BUILD: 公司内网定制默认值 ====
+/// 编译期内嵌，等价于签名 custom.txt 的效果，但无需签名（我们自持私钥）。
+/// 覆盖三类配置：
+///   1. HARD_SETTINGS     —— 硬性开关（disable-ab / disable-account，前端 isDisableAb() 直接读取）
+///   2. BUILTIN_SETTINGS  —— 隐藏项（hide-*-settings / hide-help-cards 等）
+///   3. DEFAULT_*_SETTINGS—— 默认值（UDP 打洞、approve-mode、关闭检查更新）
+fn apply_corporate_defaults() {
+    // 1) 硬性开关：隐藏「地址簿」与「账户」相关入口（is_some_hard_opton 只认 HARD_SETTINGS）
+    {
+        let mut hard = config::HARD_SETTINGS.write().unwrap();
+        hard.insert("disable-ab".to_owned(), "Y".to_owned());
+        hard.insert("disable-account".to_owned(), "Y".to_owned());
+    }
+    // 2) 隐藏设置项（BUILTIN_SETTINGS，前端 mainGetBuildinOption 读取）
+    {
+        let mut builtin = config::BUILTIN_SETTINGS.write().unwrap();
+        // 网络设置整页隐藏（服务器地址/key 已硬编码，禁止用户改动）
+        builtin.insert(keys::OPTION_HIDE_SERVER_SETTINGS.to_owned(), "Y".to_owned());
+        builtin.insert(keys::OPTION_HIDE_PROXY_SETTINGS.to_owned(), "Y".to_owned());
+        builtin.insert(keys::OPTION_HIDE_WEBSOCKET_SETTINGS.to_owned(), "Y".to_owned());
+        // 隐藏首页帮助卡片（部分卡片跳转外网 rustdesk.com）
+        builtin.insert(keys::OPTION_HIDE_HELP_CARDS.to_owned(), "Y".to_owned());
+        // 隐藏远程打印机设置（内网未部署打印驱动）
+        builtin
+            .insert(keys::OPTION_HIDE_REMOTE_PRINTER_SETTINGS.to_owned(), "Y".to_owned());
+        // 隐藏「Powered by RustDesk」标识，避免误导员工
+        builtin.insert(keys::OPTION_HIDE_POWERED_BY_ME.to_owned(), "Y".to_owned());
+    }
+    // 3) 默认值
+    {
+        // UDP 打洞默认启用：自建内网服务器属非公网地址，
+        // 源码 get_local_option() 对非公网 rendezvous 默认返回 "N"，此处显式覆盖为 "Y"
+        let mut local = config::DEFAULT_LOCAL_SETTINGS.write().unwrap();
+        local.insert(keys::OPTION_ENABLE_UDP_PUNCH.to_owned(), "Y".to_owned());
+        // 隐藏「可访问设备」分组面板
+        local.insert(keys::OPTION_DISABLE_GROUP_PANEL.to_owned(), "Y".to_owned());
+        // 关闭「启用检查更新」（enable-check-update 属 LOCAL 选项，前端设置页读取的就是它）
+        local.insert(keys::OPTION_ENABLE_CHECK_UPDATE.to_owned(), "N".to_owned());
+
+        let mut settings = config::DEFAULT_SETTINGS.write().unwrap();
+        // 默认「允许密码或点击访问」——两种远程方式并存（无人值守 + 用户同意）
+        settings.insert(keys::OPTION_APPROVE_MODE.to_owned(), "password-click".to_owned());
+        // 关闭自动更新（allow-auto-update 属 SERVER 选项）
+        settings.insert(keys::OPTION_ALLOW_AUTO_UPDATE.to_owned(), "N".to_owned());
+    }
+    log::info!("Moganshan corporate defaults applied");
+}
+
 pub fn load_custom_client() {
+    // 公司内网定制默认值（无 custom.txt 也会生效）
+    apply_corporate_defaults();
     #[cfg(debug_assertions)]
     if let Ok(data) = std::fs::read_to_string("./custom.txt") {
         read_custom_client(data.trim());
