@@ -2005,6 +2005,25 @@ pub fn create_symmetric_key_msg(their_pk_b: [u8; 32]) -> (Bytes, Bytes, secretbo
 
 #[inline]
 pub fn using_public_server() -> bool {
+    // ==== MOGANSHAN CUSTOM BUILD: 内嵌自建服务器 → 永远不是「公共服务器」 ====
+    // 【为什么不能只依赖 option】(2026-10-13 实机复现)
+    //   原实现：get_custom_rendezvous_server(get_option("custom-rendezvous-server")).is_empty()
+    //   这里的 get_option 是 ui_interface::get_option（本文件 L42 导入），它读的是
+    //   进程内的 OPTIONS 缓存（Arc<Mutex<HashMap>>，初值 Config::get_options()）。
+    //   ⚠️ 该缓存会被 Windows 服务进程通过 IPC 整体覆盖：
+    //        check_connect_status_() -> Ok(Data::Options(Some(v))) => *OPTIONS = v
+    //   而服务进程读的是自己的 TOML（C:\Windows\ServiceProfiles\LocalService\...），
+    //   免安装版或未跑安装器时该文件可能不存在/无此键，于是 GUI 的 OPTIONS 被覆盖后
+    //   custom-rendezvous-server 变空 → using_public_server() 误判为 true →
+    //   底部出现「如果需要更快连接速度，你可以选择自建服务器」(setup_server_tip)，
+    //   并把设置入口按「公共服务器」分支渲染。
+    //   实测：即便 %APPDATA%\RustDesk\config\RustDesk2.toml 里已有
+    //   custom-rendezvous-server = '192.168.40.86:21116'，UI 仍显示该提示。
+    // 【治本方案】编译期内嵌了 RENDEZVOUS_SERVERS 就必然不是公共服务器，
+    //   直接短路，不再单点依赖可被覆盖的运行时 option。
+    if !config::RENDEZVOUS_SERVERS.is_empty() {
+        return false;
+    }
     crate::get_custom_rendezvous_server(get_option("custom-rendezvous-server")).is_empty()
 }
 
@@ -2061,15 +2080,28 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
 ///   2. BUILTIN_SETTINGS  —— 隐藏项（hide-*-settings / hide-help-cards 等）
 ///   3. DEFAULT_*_SETTINGS—— 默认值（UDP 打洞、approve-mode、关闭检查更新）
 fn apply_corporate_defaults() {
-    // 1) 硬性开关：隐藏「地址簿」与「账户」相关入口（is_some_hard_opton 只认 HARD_SETTINGS）
+    // 1) 硬性开关：隐藏「地址簿」「账户」以及「整个设置入口」（is_some_hard_opton 只认 HARD_SETTINGS）
     {
         let mut hard = config::HARD_SETTINGS.write().unwrap();
         hard.insert("disable-ab".to_owned(), "Y".to_owned());
         hard.insert("disable-account".to_owned(), "Y".to_owned());
+        // 隐藏标题栏右上角的「☰ 设置」按钮，并让设置页所有分类（安全/网络/…）整体不注册。
+        // 前端：desktop_tab_page.dart 的 tail 走 bind.isDisableSettings()；
+        //       desktop_setting_page.dart 的 tabKeys 走 bind.isDisableSettings()；
+        // 后端：config::is_disable_settings() -> is_some_hard_opton("disable-settings")
+        hard.insert("disable-settings".to_owned(), "Y".to_owned());
     }
     // 2) 隐藏设置项（BUILTIN_SETTINGS，前端 mainGetBuildinOption 读取）
     {
         let mut builtin = config::BUILTIN_SETTINGS.write().unwrap();
+        // ⚠️ 连锁豁免：disable-settings=Y 会让 core_main.rs 的 is_cli_setting_change_disabled()
+        //    返回 true，导致 `--password` / `--set-id` / `--option` 全部打印
+        //    "Settings are disabled!" 并直接 return，安装器的无人值守密码写入会失效。
+        //    该开关属于 BUILTIN_SETTINGS（KEYS_BUILDIN_SETTINGS 列表内），必须显式置 "Y" 放行。
+        builtin.insert(
+            keys::OPTION_ALLOW_COMMAND_LINE_SETTINGS_WHEN_SETTINGS_DISABLED.to_owned(),
+            "Y".to_owned(),
+        );
         // 网络设置整页隐藏（服务器地址/key 已硬编码，禁止用户改动）
         builtin.insert(keys::OPTION_HIDE_SERVER_SETTINGS.to_owned(), "Y".to_owned());
         builtin.insert(keys::OPTION_HIDE_PROXY_SETTINGS.to_owned(), "Y".to_owned());
@@ -2081,6 +2113,8 @@ fn apply_corporate_defaults() {
             .insert(keys::OPTION_HIDE_REMOTE_PRINTER_SETTINGS.to_owned(), "Y".to_owned());
         // 隐藏「Powered by RustDesk」标识，避免误导员工
         builtin.insert(keys::OPTION_HIDE_POWERED_BY_ME.to_owned(), "Y".to_owned());
+        // 隐藏「服务 → 停止」按钮：防止员工误停 RustDesk 服务导致 IT 无法远程接入
+        builtin.insert(keys::OPTION_HIDE_STOP_SERVICE.to_owned(), "Y".to_owned());
     }
     // 3) 默认值
     {
@@ -2098,6 +2132,27 @@ fn apply_corporate_defaults() {
         settings.insert(keys::OPTION_APPROVE_MODE.to_owned(), "password-click".to_owned());
         // 关闭自动更新（allow-auto-update 属 SERVER 选项）
         settings.insert(keys::OPTION_ALLOW_AUTO_UPDATE.to_owned(), "N".to_owned());
+
+        // 兜底内嵌「自定义服务器」相关 option（保持 UI/CLI 读 option 的路径也一致）：
+        //    using_public_server() 的治本修复在函数内部直接短路（见该函数体注释），
+        //    这里只是让 get_option("custom-rendezvous-server") 等调用路径拿到正确值，
+        //    避免「设置页里显示服务器为空」一类副作用。
+        //    ⚠️ 注意 get_or 优先级：OVERWRITE -> CONFIG2.options(TOML) -> DEFAULT_SETTINGS，
+        //    TOML 里已有同键时以 TOML 为准，此处对已装机为冗余保险、对新机为必要兜底。
+        if let Some(server) = config::RENDEZVOUS_SERVERS.first() {
+            let s = server.to_string();
+            let with_port = format!("{}:{}", s, config::RENDEZVOUS_PORT);
+            settings.insert(
+                keys::OPTION_CUSTOM_RENDEZVOUS_SERVER.to_owned(),
+                with_port.clone(),
+            );
+            settings.insert(keys::OPTION_RELAY_SERVER.to_owned(), with_port);
+            settings.insert(
+                keys::OPTION_API_SERVER.to_owned(),
+                format!("http://{}:{}", s, config::RENDEZVOUS_PORT - 2),
+            );
+            settings.insert(keys::OPTION_KEY.to_owned(), config::RS_PUB_KEY.to_owned());
+        }
     }
     log::info!("Moganshan corporate defaults applied");
 }

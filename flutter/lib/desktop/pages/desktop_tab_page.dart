@@ -20,6 +20,19 @@ class DesktopTabPage extends StatefulWidget {
 
   static void onAddSetting(
       {SettingsTabKey initialPage = SettingsTabKey.general}) {
+    // ==== MOGANSHAN CUSTOM BUILD: 设置页总闸门 ====
+    // disable-settings=Y 时，禁止通过任何入口打开设置页。
+    // 【为什么必须在这里拦】(2026-10-13 排查)
+    //   标题栏右上角的「☰」虽然由 tail 的 bind.isDisableSettings() 隐藏，
+    //   但 desktop_home_page.dart 里还有几处入口**没有**过这个判断：
+    //     - L167-176  「你的桌面」ID 右侧的 Icons.settings（编辑按钮）
+    //     - L260-262  「你的桌面」卡片右上角 more_vert 弹出菜单里的一项
+    //     - L374-379  收藏面板里的 Icons.edit（改密码）
+    //   它们最终都调用本函数 / DesktopSettingPage.switch2page()，故在此统一收口。
+    if (bind.isDisableSettings()) {
+      debugPrint('settings disabled by corporate policy, ignoring open request');
+      return;
+    }
     try {
       DesktopTabController tabController = Get.find<DesktopTabController>();
       tabController.add(TabInfo(
