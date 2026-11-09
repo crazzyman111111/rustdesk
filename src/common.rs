@@ -2117,7 +2117,9 @@ fn apply_corporate_defaults() {
         // 设置 → 安全 → 密码：同时使用两种密码（固定 + 一次性）
         settings.insert("verification-method".to_owned(), "use-both-passwords".to_owned());
         // 设置 → 显示：默认显示方式 = 适应窗口
-        settings.insert("view-style".to_owned(), "adaptive".to_owned());
+        // ⚠️ 键名是下划线 view_style（见 flutter/lib/consts.dart: kOptionViewStyle），
+        //    写成 view-style 不会报错但完全不生效——v4 就是踩了这个坑。
+        settings.insert("view_style".to_owned(), "adaptive".to_owned());
 
         // 兜底内嵌「自定义服务器」相关 option（保持 UI/CLI 读 option 的路径也一致）：
         //    using_public_server() 的治本修复在函数内部直接短路（见该函数体注释），
