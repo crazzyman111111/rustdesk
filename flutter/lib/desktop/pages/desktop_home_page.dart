@@ -163,13 +163,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                         size: 22,
                       ),
                     ),
-                    onTap: () => {
-                      if (DesktopSettingPage.tabKeys.isNotEmpty)
-                        {
-                          DesktopSettingPage.switch2page(
-                              DesktopSettingPage.tabKeys[0])
-                        }
-                    },
+                    // v4: 统一走管理员密码闸门，避免绕过
+                    onTap: () => DesktopTabPage.onAddSetting(),
                     onHover: (value) => _editHover.value = value,
                   ),
                 ),
@@ -181,9 +176,40 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   }
 
   buildRightPane(BuildContext context) {
-    return Container(
-      color: Theme.of(context).scaffoldBackgroundColor,
-      child: ConnectionPage(),
+    // ==== MOGANSHAN CUSTOM BUILD v4: 主界面背景（大楼图 + 横向渐变，强度「中」）====
+    // 只替换右栏原本的纯色 Container；ConnectionPage 控件树、按钮位置与样式完全不改。
+    // 左栏 buildLeftPane() 自带不透明底色，保持原版。
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: Container(
+            decoration: BoxDecoration(
+              image: DecorationImage(
+                image: AssetImage('assets/mgs_bg.jpg'),
+                fit: BoxFit.cover,
+                alignment: Alignment.center,
+              ),
+            ),
+          ),
+        ),
+        Positioned.fill(
+          child: Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+                colors: [
+                  Color(0xF5FFFFFF),
+                  Color(0xE0FFFFFF),
+                  Color(0xC7FFFFFF),
+                ],
+                stops: [0.0, 0.45, 1.0],
+              ),
+            ),
+          ),
+        ),
+        Positioned.fill(child: ConnectionPage()),
+      ],
     );
   }
 
@@ -373,8 +399,9 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                               ).marginOnly(right: 8, top: 4),
                             ),
                           ),
-                          onTap: () => DesktopSettingPage.switch2page(
-                              SettingsTabKey.safety),
+                          // v4: 统一走管理员密码闸门，避免绕过
+                          onTap: () => DesktopTabPage.onAddSetting(
+                              initialPage: SettingsTabKey.safety),
                           onHover: (value) => editHover.value = value,
                         ),
                     ],

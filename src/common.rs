@@ -2080,41 +2080,21 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
 ///   2. BUILTIN_SETTINGS  —— 隐藏项（hide-*-settings / hide-help-cards 等）
 ///   3. DEFAULT_*_SETTINGS—— 默认值（UDP 打洞、approve-mode、关闭检查更新）
 fn apply_corporate_defaults() {
-    // 1) 硬性开关：隐藏「地址簿」「账户」以及「整个设置入口」（is_some_hard_opton 只认 HARD_SETTINGS）
-    {
-        let mut hard = config::HARD_SETTINGS.write().unwrap();
-        hard.insert("disable-ab".to_owned(), "Y".to_owned());
-        hard.insert("disable-account".to_owned(), "Y".to_owned());
-        // 隐藏标题栏右上角的「☰ 设置」按钮，并让设置页所有分类（安全/网络/…）整体不注册。
-        // 前端：desktop_tab_page.dart 的 tail 走 bind.isDisableSettings()；
-        //       desktop_setting_page.dart 的 tabKeys 走 bind.isDisableSettings()；
-        // 后端：config::is_disable_settings() -> is_some_hard_opton("disable-settings")
-        hard.insert("disable-settings".to_owned(), "Y".to_owned());
-    }
-    // 2) 隐藏设置项（BUILTIN_SETTINGS，前端 mainGetBuildinOption 读取）
+    // 1) HARD_SETTINGS —— v4: 不再隐藏任何界面入口
+    //    地址簿 / 账户 / 设置入口全部按 RustDesk 原版显示，故不再写入
+    //    disable-ab / disable-account / disable-settings。
+    // 2) BUILTIN_SETTINGS —— v4: 不再隐藏任何设置项
     {
         let mut builtin = config::BUILTIN_SETTINGS.write().unwrap();
-        // ⚠️ 连锁豁免：disable-settings=Y 会让 core_main.rs 的 is_cli_setting_change_disabled()
-        //    返回 true，导致 `--password` / `--set-id` / `--option` 全部打印
-        //    "Settings are disabled!" 并直接 return，安装器的无人值守密码写入会失效。
-        //    该开关属于 BUILTIN_SETTINGS（KEYS_BUILDIN_SETTINGS 列表内），必须显式置 "Y" 放行。
+        // 保留：确保 --password / --set-id / --option 永不被 "Settings are disabled!" 拦截
+        // （该键属于 KEYS_BUILDIN_SETTINGS，必须显式置 "Y"）
         builtin.insert(
             keys::OPTION_ALLOW_COMMAND_LINE_SETTINGS_WHEN_SETTINGS_DISABLED.to_owned(),
             "Y".to_owned(),
         );
-        // 网络设置整页隐藏（服务器地址/key 已硬编码，禁止用户改动）
-        builtin.insert(keys::OPTION_HIDE_SERVER_SETTINGS.to_owned(), "Y".to_owned());
-        builtin.insert(keys::OPTION_HIDE_PROXY_SETTINGS.to_owned(), "Y".to_owned());
-        builtin.insert(keys::OPTION_HIDE_WEBSOCKET_SETTINGS.to_owned(), "Y".to_owned());
-        // 隐藏首页帮助卡片（部分卡片跳转外网 rustdesk.com）
-        builtin.insert(keys::OPTION_HIDE_HELP_CARDS.to_owned(), "Y".to_owned());
-        // 隐藏远程打印机设置（内网未部署打印驱动）
-        builtin
-            .insert(keys::OPTION_HIDE_REMOTE_PRINTER_SETTINGS.to_owned(), "Y".to_owned());
-        // 隐藏「Powered by RustDesk」标识，避免误导员工
-        builtin.insert(keys::OPTION_HIDE_POWERED_BY_ME.to_owned(), "Y".to_owned());
-        // 隐藏「服务 → 停止」按钮：防止员工误停 RustDesk 服务导致 IT 无法远程接入
-        builtin.insert(keys::OPTION_HIDE_STOP_SERVICE.to_owned(), "Y".to_owned());
+        // v4 移除：hide-server-settings / hide-proxy-settings / hide-websocket-settings /
+        //          hide-help-cards / hide-remote-printer-settings / hide-powered-by-me /
+        //          hide-stop-service —— 设置页按原版完整显示。
     }
     // 3) 默认值
     {
@@ -2122,8 +2102,7 @@ fn apply_corporate_defaults() {
         // 源码 get_local_option() 对非公网 rendezvous 默认返回 "N"，此处显式覆盖为 "Y"
         let mut local = config::DEFAULT_LOCAL_SETTINGS.write().unwrap();
         local.insert(keys::OPTION_ENABLE_UDP_PUNCH.to_owned(), "Y".to_owned());
-        // 隐藏「可访问设备」分组面板
-        local.insert(keys::OPTION_DISABLE_GROUP_PANEL.to_owned(), "Y".to_owned());
+        // v4 移除 disable-group-panel：首页设备分组面板按原版显示
         // 关闭「启用检查更新」（enable-check-update 属 LOCAL 选项，前端设置页读取的就是它）
         local.insert(keys::OPTION_ENABLE_CHECK_UPDATE.to_owned(), "N".to_owned());
 
@@ -2132,6 +2111,13 @@ fn apply_corporate_defaults() {
         settings.insert(keys::OPTION_APPROVE_MODE.to_owned(), "password-click".to_owned());
         // 关闭自动更新（allow-auto-update 属 SERVER 选项）
         settings.insert(keys::OPTION_ALLOW_AUTO_UPDATE.to_owned(), "N".to_owned());
+        // ==== v4 新增三项默认值 ====
+        // 设置 → 安全 → 权限：允许远程修改配置 = 开
+        settings.insert("allow-remote-config-modification".to_owned(), "Y".to_owned());
+        // 设置 → 安全 → 密码：同时使用两种密码（固定 + 一次性）
+        settings.insert("verification-method".to_owned(), "use-both-passwords".to_owned());
+        // 设置 → 显示：默认显示方式 = 适应窗口
+        settings.insert("view-style".to_owned(), "adaptive".to_owned());
 
         // 兜底内嵌「自定义服务器」相关 option（保持 UI/CLI 读 option 的路径也一致）：
         //    using_public_server() 的治本修复在函数内部直接短路（见该函数体注释），
