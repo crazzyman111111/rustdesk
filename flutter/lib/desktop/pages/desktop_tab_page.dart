@@ -74,7 +74,9 @@ class DesktopTabPage extends StatefulWidget {
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFF26522)),
+                  // 与莫干山 logo 同色（取样自 assets/logo.png 主色 #0090D0）
+                  backgroundColor: const Color(0xFF0090D0),
+                  foregroundColor: Colors.white),
               onPressed: () => submit(setState, dialogCtx),
               child: const Text('确定', style: TextStyle(color: Colors.white)),
             ),
