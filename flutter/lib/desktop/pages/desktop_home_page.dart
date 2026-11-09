@@ -176,7 +176,9 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   }
 
   buildRightPane(BuildContext context) {
-    // ==== MOGANSHAN CUSTOM BUILD v4: 主界面背景（大楼图 + 横向渐变，强度「中」）====
+    // ==== MOGANSHAN CUSTOM BUILD v5: 主界面背景（大楼图 + 横向渐变，强度「深」）====
+    // v5：白色蒙版整体下调透明度（F5/E0/C7 -> EB/BB/8C），让大楼图更清晰；
+    //     左半区仍保持较高白度，保证「控制远程桌面」标题与输入框可读。
     // 只替换右栏原本的纯色 Container；ConnectionPage 控件树、按钮位置与样式完全不改。
     // 左栏 buildLeftPane() 自带不透明底色，保持原版。
     return Stack(
@@ -199,9 +201,9 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                 begin: Alignment.centerLeft,
                 end: Alignment.centerRight,
                 colors: [
-                  Color(0xF5FFFFFF),
-                  Color(0xE0FFFFFF),
-                  Color(0xC7FFFFFF),
+                  Color(0xEBFFFFFF),
+                  Color(0xBBFFFFFF),
+                  Color(0x8CFFFFFF),
                 ],
                 stops: [0.0, 0.45, 1.0],
               ),
