@@ -82,11 +82,26 @@ jobs:
           architecture: x64
 
       - name: Replace engine with rustdesk custom flutter engine
+        shell: pwsh
         run: |
           flutter doctor -v
           flutter precache --windows
-          Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
-          Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
+          # v4: GitHub release 偶发 504，下载带重试，避免整轮构建白跑
+          $url = 'https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip'
+          $out = 'windows-x64-release.zip'
+          $ok = $false
+          for ($i = 1; $i -le 6; $i++) {
+            try {
+              if (Test-Path $out) { Remove-Item $out -Force }
+              Invoke-WebRequest -Uri $url -OutFile $out -ErrorAction Stop -TimeoutSec 180
+              if ((Get-Item $out).Length -gt 1MB) { $ok = $true; break }
+            } catch {
+              Write-Host "engine download attempt $i failed: $_"
+              Start-Sleep -Seconds 10
+            }
+          }
+          if (-not $ok) { throw 'engine zip download failed after retries' }
+          Expand-Archive -Path $out -DestinationPath windows-x64-release -Force
           mv -Force windows-x64-release/*  C:/hostedtoolcache/windows/flutter/stable-${{ env.FLUTTER_VERSION }}-x64/bin/cache/artifacts/engine/windows-x64-release/
 
       - name: Patch flutter
@@ -107,12 +122,41 @@ jobs:
         with:
           prefix-key: windows-2022
 
-      - name: Setup vcpkg with Github Actions binary cache
-        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
-        with:
-          vcpkgDirectory: C:\vcpkg
-          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
-          doNotCache: false
+      # v4: 原 lukka/run-vcpkg 内部 bootstrap 会无条件从 GitHub release 下载 vcpkg.exe，
+      # 近期持续 504 且无法用预置文件跳过。改为手动 clone + 带重试下载工具，
+      # 版本从 vcpkg-tool-metadata.txt 读取，保证与 VCPKG_COMMIT_ID 匹配。
+      - name: Setup vcpkg (manual, with download retry)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = 'C:\vcpkg'
+          if (-not (Test-Path "$root\.git")) {
+            if (Test-Path $root) { Remove-Item $root -Recurse -Force }
+            git clone https://github.com/microsoft/vcpkg.git $root
+          }
+          Push-Location $root
+          git fetch --all --quiet
+          git checkout --quiet ${{ env.VCPKG_COMMIT_ID }}
+          $cfg = ConvertFrom-StringData (Get-Content "$root\scripts\vcpkg-tool-metadata.txt" -Raw)
+          $ver = $cfg.VCPKG_TOOL_RELEASE_TAG
+          Write-Host "vcpkg-tool release: $ver"
+          $url = "https://github.com/microsoft/vcpkg-tool/releases/download/$ver/vcpkg.exe"
+          $exe = "$root\vcpkg.exe"
+          $ok = $false
+          for ($i = 1; $i -le 8; $i++) {
+            try {
+              if (Test-Path $exe) { Remove-Item $exe -Force }
+              Invoke-WebRequest -Uri $url -OutFile $exe -ErrorAction Stop -TimeoutSec 180
+              if ((Get-Item $exe).Length -gt 1MB) { $ok = $true; break }
+            } catch {
+              Write-Host "vcpkg.exe attempt $i failed: $_"
+              Start-Sleep -Seconds 12
+            }
+          }
+          if (-not $ok) { throw 'vcpkg.exe download failed after retries' }
+          & $exe version --disable-metrics
+          Pop-Location
+          "VCPKG_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Install vcpkg dependencies
         env:
@@ -139,8 +183,20 @@ jobs:
           mv ./flutter/build/windows/x64/runner/Release ./rustdesk
 
           # usbmmidd_v2 (虚拟显示器驱动)
-          Invoke-WebRequest -Uri https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip -OutFile usbmmidd_v2.zip
-          Expand-Archive usbmmidd_v2.zip -DestinationPath .
+          # v4: 同样带重试，避免 release 504 中断构建
+          $usbUrl = 'https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip'
+          $usbOk = $false
+          for ($i = 1; $i -le 6; $i++) {
+            try {
+              Invoke-WebRequest -Uri $usbUrl -OutFile usbmmidd_v2.zip -ErrorAction Stop -TimeoutSec 180
+              if ((Get-Item usbmmidd_v2.zip).Length -gt 1KB) { $usbOk = $true; break }
+            } catch {
+              Write-Host "usbmmidd attempt $i failed: $_"
+              Start-Sleep -Seconds 10
+            }
+          }
+          if (-not $usbOk) { throw 'usbmmidd_v2.zip download failed after retries' }
+          Expand-Archive usbmmidd_v2.zip -DestinationPath . -Force
           Remove-Item -Path usbmmidd_v2\Win32 -Recurse
           Remove-Item -Path "usbmmidd_v2\deviceinstaller64.exe", "usbmmidd_v2\deviceinstaller.exe", "usbmmidd_v2\usbmmidd.bat"
           mv -Force .\usbmmidd_v2 ./rustdesk
