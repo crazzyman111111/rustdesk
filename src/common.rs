@@ -128,6 +128,8 @@ pub fn global_init() -> bool {
             crate::server::wayland::init();
         }
     }
+    // MGS：启动后台策略拉取线程（服务端与 UI 进程各起一次，互不干扰）
+    crate::mgs_policy::start();
     true
 }
 
