@@ -2116,9 +2116,17 @@ fn apply_corporate_defaults() {
         settings.insert("allow-remote-config-modification".to_owned(), "Y".to_owned());
         // 设置 → 安全 → 密码：同时使用两种密码（固定 + 一次性）
         settings.insert("verification-method".to_owned(), "use-both-passwords".to_owned());
-        // 设置 → 显示：默认显示方式 = 适应窗口
-        // ⚠️ 键名是下划线 view_style（见 flutter/lib/consts.dart: kOptionViewStyle），
-        //    写成 view-style 不会报错但完全不生效——v4 就是踩了这个坑。
+
+        // ==== v6 修正：显示类选项必须写 DEFAULT_DISPLAY_SETTINGS，不能写 DEFAULT_SETTINGS ====
+        // 「设置 → 显示」这些项由 UserDefaultConfig 提供，取值优先级是
+        //   OVERWRITE_DISPLAY_SETTINGS -> RustDesk_default.toml[options] -> DEFAULT_DISPLAY_SETTINGS
+        // 与 RustDesk2.toml 的 [options] 是两套独立的存储，写错表等于没写。
+        {
+            let mut display = config::DEFAULT_DISPLAY_SETTINGS.write().unwrap();
+            // 键名是下划线 view_style（flutter/lib/consts.dart: kOptionViewStyle）
+            display.insert("view_style".to_owned(), "adaptive".to_owned());
+        }
+        // 兼容：仍往 Config2.options 里放一份，供会话层 get_option("view_style") 直接读取
         settings.insert("view_style".to_owned(), "adaptive".to_owned());
 
         // 兜底内嵌「自定义服务器」相关 option（保持 UI/CLI 读 option 的路径也一致）：
